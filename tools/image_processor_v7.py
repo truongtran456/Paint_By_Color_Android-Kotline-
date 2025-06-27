@@ -1,0 +1,592 @@
+import cv2
+import numpy as np
+import svgwrite
+from pathlib import Path
+import json
+from sklearn.cluster import DBSCAN
+from sklearn.preprocessing import StandardScaler
+from collections import defaultdict
+
+def analyze_region_color(img, mask):
+    """Phân tích màu của một vùng với độ chính xác cực cao."""
+    pixels = img[mask > 0]
+    if len(pixels) == 0:
+        return (0, 0, 0), True
+
+    # Chuyển đổi sang các không gian màu
+    pixels_rgb = pixels.astype(np.float32)
+    pixels_hsv = cv2.cvtColor(np.uint8([pixels]), cv2.COLOR_BGR2HSV)[0]
+
+    # Tính tỷ lệ pixel trắng trong vùng
+    white_pixels = np.sum((pixels_hsv[:, 1] < 20) & (pixels_hsv[:, 2] > 245))
+    white_ratio = white_pixels / len(pixels)
+
+    # Tính độ đồng nhất của màu
+    color_std = np.std(pixels_hsv, axis=0)
+    color_uniformity = np.mean(color_std)
+
+    # Tính tỷ lệ pixel có độ sáng cao
+    bright_pixels = np.sum(pixels_hsv[:, 2] > 245)
+    bright_ratio = bright_pixels / len(pixels)
+
+    # Điều kiện background nghiêm ngặt hơn
+    if white_ratio > 0.98 and color_uniformity < 5:  # Vùng rất trắng và rất đồng nhất
+        return (0, 0, 255), True
+    elif bright_ratio > 0.95 and np.mean(pixels_hsv[:, 1]) < 10 and color_uniformity < 8:  # Vùng rất sáng và ít màu
+        return (0, 0, 255), True
+
+    # Tính màu chủ đạo
+    if len(pixels) < 100:  # Vùng rất nhỏ
+        dominant_color = np.median(pixels_hsv, axis=0)
+    else:  # Vùng lớn hơn
+        # Tính histogram cho từng kênh
+        h_hist = np.histogram(pixels_hsv[:, 0], bins=180, range=(0, 180))[0]
+        s_hist = np.histogram(pixels_hsv[:, 1], bins=256, range=(0, 256))[0]
+        v_hist = np.histogram(pixels_hsv[:, 2], bins=256, range=(0, 256))[0]
+        
+        # Lấy giá trị phổ biến nhất
+        h = np.argmax(h_hist)
+        s = np.argmax(s_hist)
+        v = np.argmax(v_hist)
+        
+        dominant_color = np.array([h, s, v])
+
+    # Trả về màu gốc và không phải background nếu là màu trắng nhưng không đủ điều kiện background
+    h, s, v = dominant_color
+    if v > 240 and s < 30:
+        return (0, 0, 240), False
+
+    return tuple(map(int, dominant_color)), False
+
+def calculate_color_similarity(color1, color2):
+    """Tính toán độ tương đồng giữa hai màu với nhiều tiêu chí."""
+    h1, s1, v1 = color1
+    h2, s2, v2 = color2
+
+    # Tính khoảng cách Hue theo vòng tròn màu
+    h_diff = min(abs(h1 - h2), 180 - abs(h1 - h2)) / 180.0
+
+    # Tính khoảng cách Saturation và Value
+    s_diff = abs(s1 - s2) / 255.0
+    v_diff = abs(v1 - v2) / 255.0
+
+    # Chuyển sang RGB và LAB để so sánh
+    rgb1 = cv2.cvtColor(np.uint8([[[h1, s1, v1]]]), cv2.COLOR_HSV2BGR)[0][0]
+    rgb2 = cv2.cvtColor(np.uint8([[[h2, s2, v2]]]), cv2.COLOR_HSV2BGR)[0][0]
+
+    lab1 = cv2.cvtColor(np.uint8([[rgb1]]), cv2.COLOR_BGR2LAB)[0][0]
+    lab2 = cv2.cvtColor(np.uint8([[rgb2]]), cv2.COLOR_BGR2LAB)[0][0]
+
+    # Tính Delta E trong không gian LAB
+    delta_e = np.sqrt(np.sum((lab1 - lab2) ** 2))
+
+    # Tính trọng số dựa trên độ bão hòa và độ sáng
+    saturation_weight = (min(s1, s2) / 255.0) * 0.7 + 0.3
+    value_weight = 1.0 - abs(v1 - v2) / 255.0
+
+    # Xác định loại màu và điều chỉnh trọng số
+    def get_color_type(h, s, v):
+        if v < 50 and s < 50:
+            return 'black'
+        if v > 240 and s < 30:
+            return 'white'
+        if 130 < h < 170 and s > 50:
+            return 'purple'
+        if 10 < h < 30 and s > 50 and v < 200:
+            return 'brown'
+        if 20 < h < 40 and s > 100:
+            return 'yellow'
+        if 0 < h < 10 and s > 150:
+            return 'red'
+        if 35 < h < 85 and s > 100:
+            return 'green'
+        if 85 < h < 130 and s > 50:
+            return 'cyan'
+        if 150 < h < 170 and s > 100:
+            return 'pink'
+        return 'other'
+
+    color_type1 = get_color_type(h1, s1, v1)
+    color_type2 = get_color_type(h2, s2, v2)
+
+    # Nếu là cùng loại màu đặc biệt, điều chỉnh độ tương đồng
+    if color_type1 == color_type2:
+        if color_type1 == 'black':
+            return 0.98 - (v_diff * 0.3)  # Độ tương đồng cao cho màu đen, nhưng vẫn phụ thuộc vào độ sáng
+        elif color_type1 == 'white':
+            return 0.98 - (s_diff * 0.3)  # Độ tương đồng cao cho màu trắng, phụ thuộc vào độ bão hòa
+        elif color_type1 in ['purple', 'brown', 'yellow']:
+            h_diff *= 0.5  # Giảm ảnh hưởng của Hue cho các màu này
+        elif color_type1 in ['red', 'green']:
+            s_diff *= 0.5  # Giảm ảnh hưởng của Saturation cho các màu này
+    else:
+        # Nếu là hai loại màu khác nhau, tăng độ khác biệt
+        h_diff *= 1.2
+        s_diff *= 1.2
+
+    # Tính điểm tương đồng màu sắc với trọng số mới
+    color_similarity = 1.0 - (
+        h_diff * 0.4 * saturation_weight +
+        s_diff * 0.3 +
+        v_diff * 0.2 * value_weight +
+        (delta_e / 100.0) * 0.1
+    )
+
+    return max(0.0, min(1.0, color_similarity))
+
+def are_colors_similar(color1, color2, threshold=0.92):
+    """So sánh màu sắc với độ chính xác cao."""
+    h1, s1, v1 = color1
+    h2, s2, v2 = color2
+
+    # Tính khoảng cách Hue theo vòng tròn màu
+    h_diff = min(abs(h1 - h2), 180 - abs(h1 - h2)) / 180.0
+    
+    # Tính khoảng cách Saturation và Value
+    s_diff = abs(s1 - s2) / 255.0
+    v_diff = abs(v1 - v2) / 255.0
+
+    # Chuyển sang LAB để so sánh chính xác hơn
+    rgb1 = cv2.cvtColor(np.uint8([[[h1, s1, v1]]]), cv2.COLOR_HSV2BGR)[0][0]
+    rgb2 = cv2.cvtColor(np.uint8([[[h2, s2, v2]]]), cv2.COLOR_HSV2BGR)[0][0]
+    lab1 = cv2.cvtColor(np.uint8([[rgb1]]), cv2.COLOR_BGR2LAB)[0][0]
+    lab2 = cv2.cvtColor(np.uint8([[rgb2]]), cv2.COLOR_BGR2LAB)[0][0]
+
+    # Tính Delta E trong không gian LAB
+    delta_e = np.sqrt(np.sum((lab1 - lab2) ** 2))
+
+    # Điều chỉnh trọng số cho từng thành phần
+    color_similarity = 1.0 - (
+        h_diff * 0.4 +      # Hue quan trọng nhất
+        s_diff * 0.3 +      # Saturation quan trọng thứ hai
+        v_diff * 0.2 +      # Value ít quan trọng hơn
+        (delta_e / 100.0) * 0.1  # Delta E bổ sung
+    )
+
+    # Xử lý các trường hợp đặc biệt
+    if v1 < 30 and v2 < 30:  # Màu đen
+        return color_similarity > 0.95
+    elif s1 < 30 and s2 < 30 and abs(v1 - v2) < 30:  # Màu xám
+        return True
+    elif v1 > 240 and v2 > 240 and s1 < 30 and s2 < 30:  # Màu trắng
+        return True
+
+    return color_similarity > threshold
+
+def merge_similar_regions(colors_with_regions):
+    """Gộp các vùng có màu tương tự dựa trên nhiều tiêu chí."""
+    if not colors_with_regions:
+        return []
+
+    # Tạo danh sách các vùng và màu
+    merged = []
+    processed = set()
+
+    # Sắp xếp theo kích thước vùng (lớn đến nhỏ)
+    sorted_regions = []
+    for color, regions in colors_with_regions:
+        for region in regions:
+            area = cv2.contourArea(region[0])
+            sorted_regions.append((color, region, area))
+    sorted_regions.sort(key=lambda x: x[2], reverse=True)
+
+    # Xử lý từng vùng
+    for i, (color1, region1, area1) in enumerate(sorted_regions):
+        if i in processed:
+            continue
+
+        # Tạo nhóm mới
+        current_group = [(color1, region1)]
+        processed.add(i)
+
+        # Tìm các vùng tương tự
+        for j, (color2, region2, area2) in enumerate(sorted_regions):
+            if j not in processed:
+                # Điều chỉnh ngưỡng dựa trên kích thước vùng
+                if area2 < 100:  # Vùng rất nhỏ
+                    similarity_threshold = 0.98  # Ngưỡng rất cao cho vùng rất nhỏ
+                elif area2 < 300:  # Vùng nhỏ
+                    similarity_threshold = 0.95  # Ngưỡng cao cho vùng nhỏ
+                else:  # Vùng lớn
+                    similarity_threshold = 0.92  # Ngưỡng bình thường cho vùng lớn
+
+                if not are_colors_similar(color1, color2, similarity_threshold):
+                    continue
+
+                # Kiểm tra thêm về vị trí và kích thước
+                x1, y1, w1, h1 = cv2.boundingRect(region1[0])
+                x2, y2, w2, h2 = cv2.boundingRect(region2[0])
+                
+                # Tính khoảng cách giữa các vùng
+                center1 = (x1 + w1/2, y1 + h1/2)
+                center2 = (x2 + w2/2, y2 + h2/2)
+                distance = np.sqrt((center1[0] - center2[0])**2 + (center1[1] - center2[1])**2)
+                
+                # Tính tỷ lệ kích thước
+                size_ratio = min(area1, area2) / max(area1, area2)
+                
+                # Điều kiện gộp nhóm dựa trên kích thước
+                if area2 < 100:  # Vùng rất nhỏ
+                    # Chỉ gộp các vùng rất nhỏ nếu chúng rất gần nhau và có kích thước tương tự
+                    if distance < (w1 + w2) and size_ratio > 0.5:
+                        current_group.append((color2, region2))
+                        processed.add(j)
+                elif area2 < 300:  # Vùng nhỏ
+                    # Gộp các vùng nhỏ với điều kiện chặt chẽ
+                    if distance < (w1 + w2) * 1.2 and size_ratio > 0.3:
+                        current_group.append((color2, region2))
+                        processed.add(j)
+                else:  # Vùng lớn
+                    # Gộp các vùng lớn với điều kiện bình thường
+                    if distance < (w1 + w2) * 1.5 and size_ratio > 0.2:
+                        current_group.append((color2, region2))
+                        processed.add(j)
+
+        if current_group:
+            merged.append(current_group)
+
+    return merged
+
+def group_similar_colors(colors_with_regions):
+    """Gom nhóm màu tương tự với độ chính xác cực cao."""
+    # Gộp các vùng tương tự
+    merged_groups = merge_similar_regions(colors_with_regions)
+    
+    # Chuyển đổi sang định dạng cuối cùng
+    final_groups = {}
+    for i, group in enumerate(merged_groups):
+        final_groups[i] = [region for _, region in group]
+    
+    return final_groups
+
+def calculate_font_scale(area, max_area):
+    """Tính toán kích thước font chữ dựa trên diện tích vùng."""
+    # Giảm base_scale xuống để số nhỏ hơn
+    base_scale = 0.4  # Giảm từ 0.8 xuống 0.4
+    
+    # Tính tỷ lệ diện tích so với max_area, sử dụng logarit để làm mượt sự chênh lệch
+    area_ratio = np.log(area + 1) / np.log(max_area + 1)
+    
+    # Với vùng rất nhỏ (< 100px)
+    if area < 100:
+        return max(base_scale * 0.3, 0.15)  # Số rất nhỏ cho vùng rất nhỏ
+    # Với vùng nhỏ (100-300px)
+    elif area < 300:
+        return max(base_scale * 0.4, 0.2)  # Số nhỏ cho vùng nhỏ
+    # Với vùng trung bình (300-1000px)
+    elif area < 1000:
+        return base_scale * (0.5 + area_ratio * 0.3)  # Số vừa phải, có tỷ lệ với diện tích
+    # Với vùng lớn (1000-5000px)
+    elif area < 5000:
+        return base_scale * (0.7 + area_ratio * 0.4)  # Số lớn hơn cho vùng lớn
+    # Với vùng rất lớn
+    else:
+        # Giới hạn scale không vượt quá 1.2 lần base_scale
+        return min(base_scale * 1.2, base_scale * (0.8 + area_ratio * 0.5))
+
+def find_text_position(contour, font_scale, text, img_shape, thickness=1):
+    """Tìm vị trí đặt số sao cho nằm gọn trong vùng."""
+    # Tính kích thước text
+    (text_w, text_h), baseline = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness)
+    
+    # Tìm bounding box của contour
+    x, y, w, h = cv2.boundingRect(contour)
+
+    # Tính moments để tìm trung tâm vùng
+    M = cv2.moments(contour)
+    if M["m00"] != 0:
+        center_x = int(M["m10"] / M["m00"])
+        center_y = int(M["m01"] / M["m00"])
+    else:
+        center_x = x + w//2
+        center_y = y + h//2
+
+    # Thêm padding để tránh chạm biên
+    padding = 4
+    
+    # Kiểm tra xem text có vừa với vùng không
+    if text_w + 2*padding > w or text_h + 2*padding > h:
+        # Nếu không vừa, giảm scale
+        new_scale = font_scale * min((w - 2*padding) / text_w, (h - 2*padding) / text_h) * 0.8
+        # Tính lại kích thước text với scale mới
+        (text_w, text_h), baseline = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, new_scale, thickness)
+        font_scale = new_scale
+    
+    # Đặt text ở trung tâm vùng
+    text_x = center_x - text_w//2
+    text_y = center_y + text_h//2
+    
+    # Đảm bảo text không vượt ra ngoài biên của ảnh
+    text_x = max(padding, min(img_shape[1] - text_w - padding, text_x))
+    text_y = max(text_h + padding, min(img_shape[0] - padding, text_y))
+    
+    # Đảm bảo text nằm trong vùng
+    text_x = max(x + padding, min(x + w - text_w - padding, text_x))
+    text_y = max(y + text_h + padding, min(y + h - padding, text_y))
+    
+    return (text_x, text_y), font_scale
+
+def create_numbered_outline(outline_path, preview_path, output_svg_path, output_line_art=None):
+    # Đọc ảnh
+    outline = cv2.imread(str(outline_path))
+    preview = cv2.imread(str(preview_path))
+
+    if outline is None or preview is None:
+        raise ValueError("Không thể đọc ảnh outline hoặc preview")
+
+    # Đảm bảo kích thước đồng nhất
+    height, width = preview.shape[:2]
+    outline = cv2.resize(outline, (width, height), interpolation=cv2.INTER_AREA)
+
+    # Chuyển preview sang ảnh xám và làm mịn
+    preview_gray = cv2.cvtColor(preview, cv2.COLOR_BGR2GRAY)
+
+    # Áp dụng ngưỡng để tách biệt các vùng
+    _, binary = cv2.threshold(preview_gray, 250, 255, cv2.THRESH_BINARY_INV)
+
+    # Tìm contours với độ chính xác cao hơn
+    contours, hierarchy = cv2.findContours(binary, cv2.RETR_TREE, cv2.CHAIN_APPROX_TC89_KCOS)
+
+    # Lọc và tinh chỉnh contours
+    valid_contours = []
+    valid_hierarchy = []
+    contour_mapping = {}
+    
+    for i, (contour, h) in enumerate(zip(contours, hierarchy[0])):
+        area = cv2.contourArea(contour)
+        # Lọc bỏ vùng viền ngoài (thường có diện tích rất lớn và chạm biên)
+        x, y, w, h_rect = cv2.boundingRect(contour)
+        is_border_region = (x <= 1 or y <= 1 or x + w >= width - 1 or y + h_rect >= height - 1) and area > width * height * 0.2
+
+        if area >= 10 and area <= width * height * 0.95 and not is_border_region:
+            # Kiểm tra tỷ lệ khung hình và độ phức tạp
+            aspect_ratio = float(w)/h_rect if h_rect > 0 else 0
+            perimeter = cv2.arcLength(contour, True)
+            complexity = perimeter / (4 * np.sqrt(area))
+            
+            # Điều kiện lọc tinh chỉnh hơn
+            if 0.02 <= aspect_ratio <= 25 and complexity < 8:
+                # Làm mịn contour
+                epsilon = 0.001 * perimeter
+                approx = cv2.approxPolyDP(contour, epsilon, True)
+                
+                # Thêm điểm để làm mịn các góc
+                refined_contour = []
+                for j in range(len(approx)):
+                    p1 = approx[j][0]
+                    p2 = approx[(j + 1) % len(approx)][0]
+                    refined_contour.append(p1)
+                    
+                    # Thêm điểm ở giữa nếu khoảng cách đủ lớn
+                    dist = np.linalg.norm(p2 - p1)
+                    if dist > 10:
+                        num_points = int(dist / 10)
+                        for k in range(1, num_points):
+                            t = k / num_points
+                            mid = p1 + t * (p2 - p1)
+                            refined_contour.append(mid)
+                
+                refined_contour = np.array(refined_contour).reshape(-1, 1, 2).astype(np.int32)
+                
+                contour_mapping[i] = len(valid_contours)
+                valid_contours.append(refined_contour)
+                valid_hierarchy.append(hierarchy[0][i])
+
+    # Cập nhật các chỉ số trong hierarchy
+    for i in range(len(valid_hierarchy)):
+        h = valid_hierarchy[i]
+        # Cập nhật next, previous, first_child, parent
+        valid_hierarchy[i] = [
+            contour_mapping.get(h[0], -1),  # next
+            contour_mapping.get(h[1], -1),  # previous
+            contour_mapping.get(h[2], -1),  # first_child
+            contour_mapping.get(h[3], -1)   # parent
+        ]
+
+    contours = valid_contours
+    hierarchy = np.array([valid_hierarchy])
+
+    # Tạo SVG
+    dwg = svgwrite.Drawing(output_svg_path, size=(width, height), viewBox=f'0 0 {width} {height}')
+
+    # Sử dụng preview làm line art
+    line_art = preview.copy()
+    if len(line_art.shape) == 2:
+        line_art = cv2.cvtColor(line_art, cv2.COLOR_GRAY2BGR)
+
+    # Khởi tạo dữ liệu
+    colors_with_regions = []
+    background_regions = []
+
+    # Tìm max_area
+    max_area = max((cv2.contourArea(c) for c in contours if cv2.contourArea(c) < width * height * 0.95), default=1)
+
+    # Phân tích màu
+    if hierarchy is not None and len(hierarchy) > 0:
+        for i, (contour, h) in enumerate(zip(contours, hierarchy[0])):
+            area = cv2.contourArea(contour)
+
+            # Tạo mask cho vùng hiện tại
+            mask = np.zeros((height, width), dtype=np.uint8)
+            cv2.drawContours(mask, [contour], -1, 255, -1)
+
+            # Xử lý vùng con
+            child_idx = h[2]  # Index của contour con đầu tiên
+            while child_idx != -1 and child_idx < len(contours):  # Thêm kiểm tra phạm vi
+                child_contour = contours[child_idx]
+                cv2.drawContours(mask, [child_contour], -1, 0, -1)  # Trừ vùng con
+                # Lấy chỉ số next sibling từ hierarchy đã cập nhật
+                if child_idx < len(hierarchy[0]):
+                    child_idx = hierarchy[0][child_idx][0]  # Next sibling
+                else:
+                    break
+
+            color, is_background = analyze_region_color(outline, mask)
+
+            if is_background:
+                background_regions.append((contour, area))
+            else:
+                matched = False
+                for existing_color, regions in colors_with_regions:
+                    if are_colors_similar(color, existing_color):
+                        regions.append((contour, area))
+                        matched = True
+                        break
+
+                if not matched:
+                    colors_with_regions.append((color, [(contour, area)]))
+
+    # Gom nhóm màu
+    grouped_regions = group_similar_colors(colors_with_regions)
+
+    # Đánh số vùng
+    regions_data = []
+    number = 1  # Bắt đầu đánh số từ 1 cho các vùng màu
+
+    # Thêm background vào SVG nhưng không đánh số
+    for contour, area in sorted(background_regions, key=lambda x: x[1], reverse=True):
+        path_data = "M"
+        for point in contour.reshape(-1, 2):
+            x, y = point
+            if path_data == "M":
+                path_data += f" {x},{y}"
+            else:
+                path_data += f" L {x},{y}"
+        path_data += " Z"
+
+        # Thêm vùng background vào SVG nhưng không đánh số
+        dwg.add(dwg.path(d=path_data, id=f"region_bg_{len(regions_data)}", fill="none", stroke="black", stroke_width=1))
+
+        # Thêm thông tin vùng background vào metadata nhưng không có số
+        regions_data.append({
+            "id": f"region_bg_{len(regions_data)}",
+            "number": None,  # Không đánh số cho background
+            "color": "#FFFFFF",
+            "area": area,
+            "is_background": True
+        })
+
+    # Vùng màu (bắt đầu từ 1)
+    processed_colors = set()  # Set để theo dõi các màu đã xử lý
+    color_to_number = {}  # Dict để lưu số cho mỗi màu
+
+    # Đầu tiên, gán số cho mỗi nhóm màu
+    for group_idx, regions in grouped_regions.items():
+        # Lấy màu đại diện của nhóm
+        group_colors = []
+        for color, regions_list in colors_with_regions:
+            for region_contour, region_area in regions:
+                for list_contour, list_area in regions_list:
+                    if np.array_equal(region_contour, list_contour):
+                        group_colors.append(color)
+                        break
+
+        if not group_colors:
+            continue
+
+        mean_color = tuple(map(int, np.mean(group_colors, axis=0)))
+
+        # Kiểm tra xem màu này đã được xử lý chưa
+        color_matched = False
+        for processed_color in processed_colors:
+            if are_colors_similar(mean_color, processed_color):
+                color_to_number[mean_color] = color_to_number[processed_color]
+                color_matched = True
+                break
+
+        if not color_matched:
+            color_to_number[mean_color] = number
+            processed_colors.add(mean_color)
+            number += 1
+
+        h, s, v = mean_color
+        rgb = cv2.cvtColor(np.uint8([[[h, s, v]]]), cv2.COLOR_HSV2BGR)[0][0]
+        color_hex = '#{:02x}{:02x}{:02x}'.format(rgb[2], rgb[1], rgb[0])
+
+        # Đánh số cho tất cả các vùng trong nhóm
+        for contour, area in sorted(regions, key=lambda x: x[1], reverse=True):
+            region_number = color_to_number[mean_color]
+            font_scale = calculate_font_scale(area, max_area)
+            text = str(region_number)
+            (text_x, text_y), actual_scale = find_text_position(contour, font_scale, text, line_art.shape)
+            
+            # Vẽ số lên line art
+            cv2.putText(line_art, text, (text_x, text_y), cv2.FONT_HERSHEY_SIMPLEX, 
+                       actual_scale, (255, 255, 255), 4, cv2.LINE_AA)
+            cv2.putText(line_art, text, (text_x, text_y), cv2.FONT_HERSHEY_SIMPLEX, 
+                       actual_scale, (0, 0, 0), 1, cv2.LINE_AA)
+
+            path_data = "M"
+            for point in contour.reshape(-1, 2):
+                x, y = point
+                if path_data == "M":
+                    path_data += f" {x},{y}"
+                else:
+                    path_data += f" L {x},{y}"
+            path_data += " Z"
+
+            # Thêm vùng màu vào SVG với số tương ứng
+            dwg.add(dwg.path(d=path_data, id=f"region_{region_number}", fill="none", stroke="black", stroke_width=1))
+
+            # Thêm thông tin vùng màu vào metadata với số tương ứng
+            regions_data.append({
+                "id": f"region_{region_number}",
+                "number": region_number,
+                "color": color_hex,
+                "area": area,
+                "is_background": False
+            })
+
+    # Tạo metadata
+    metadata = {
+        "name": Path(outline_path).stem,
+        "difficulty": min(5, max(1, len(grouped_regions) // 3)),
+        "regions": regions_data
+    }
+
+    # Lưu SVG
+    with open(output_svg_path, 'w', encoding='utf-8') as f:
+        f.write('<?xml version="1.0" encoding="UTF-8"?>\n')
+        f.write(f'<!--\n{json.dumps(metadata, indent=4)}\n-->\n')
+        f.write(dwg.tostring())
+
+    # Lưu line art
+    if output_line_art:
+        cv2.imwrite(output_line_art, line_art)
+
+    return metadata
+
+def main():
+    import argparse
+    parser = argparse.ArgumentParser(description='Tạo ảnh tô màu theo số từ outline và preview')
+    parser.add_argument('outline', help='Đường dẫn đến ảnh outline')
+    parser.add_argument('preview', help='Đường dẫn đến ảnh preview có màu')
+    parser.add_argument('output_svg', help='Đường dẫn đến file SVG đầu ra')
+    parser.add_argument('--output-line-art', help='Đường dẫn đến ảnh line art đầu ra')
+
+    args = parser.parse_args()
+    metadata = create_numbered_outline(args.outline, args.preview, args.output_svg, args.output_line_art)
+    print(f"Đã tạo mẫu tô màu theo số với {len(metadata['regions'])} vùng")
+
+if __name__ == '__main__':
+    main()

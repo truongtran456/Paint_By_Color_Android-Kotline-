@@ -1,0 +1,102 @@
+<?xml version="1.0" encoding="utf-8"?>
+<androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/white">
+
+    <ImageView
+        android:id="@+id/ivPalette"
+        android:layout_width="120dp"
+        android:layout_height="120dp"
+        android:src="@drawable/ic_palette"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toTopOf="parent"
+        app:tint="@color/colorPrimary" />
+
+    <TextView
+        android:id="@+id/tvAppName"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="24dp"
+        android:fontFamily="cursive"
+        android:text="Paint By Number"
+        android:textColor="@color/colorPrimary"
+        android:textSize="36sp"
+        android:textStyle="bold"
+        android:alpha="0"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@id/ivPalette" />
+
+    <TextView
+        android:id="@+id/tvTagline"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:text="Create By Quoc Truong"
+        android:textColor="@color/colorAccent"
+        android:textSize="18sp"
+        android:alpha="0"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@id/tvAppName" />
+
+    <View
+        android:id="@+id/circle1"
+        android:layout_width="20dp"
+        android:layout_height="20dp"
+        android:background="@drawable/circle_background"
+        android:backgroundTint="#FF5252"
+        android:alpha="0"
+        app:layout_constraintCircle="@id/ivPalette"
+        app:layout_constraintCircleAngle="0"
+        app:layout_constraintCircleRadius="100dp" />
+
+    <View
+        android:id="@+id/circle2"
+        android:layout_width="20dp"
+        android:layout_height="20dp"
+        android:background="@drawable/circle_background"
+        android:backgroundTint="#FF9800"
+        android:alpha="0"
+        app:layout_constraintCircle="@id/ivPalette"
+        app:layout_constraintCircleAngle="72"
+        app:layout_constraintCircleRadius="100dp" />
+
+    <View
+        android:id="@+id/circle3"
+        android:layout_width="20dp"
+        android:layout_height="20dp"
+        android:background="@drawable/circle_background"
+        android:backgroundTint="#4CAF50"
+        android:alpha="0"
+        app:layout_constraintCircle="@id/ivPalette"
+        app:layout_constraintCircleAngle="144"
+        app:layout_constraintCircleRadius="100dp" />
+
+    <View
+        android:id="@+id/circle4"
+        android:layout_width="20dp"
+        android:layout_height="20dp"
+        android:background="@drawable/circle_background"
+        android:backgroundTint="#2196F3"
+        android:alpha="0"
+        app:layout_constraintCircle="@id/ivPalette"
+        app:layout_constraintCircleAngle="216"
+        app:layout_constraintCircleRadius="100dp" />
+
+    <View
+        android:id="@+id/circle5"
+        android:layout_width="20dp"
+        android:layout_height="20dp"
+        android:background="@drawable/circle_background"
+        android:backgroundTint="#9C27B0"
+        android:alpha="0"
+        app:layout_constraintCircle="@id/ivPalette"
+        app:layout_constraintCircleAngle="288"
+        app:layout_constraintCircleRadius="100dp" />
+
+</androidx.constraintlayout.widget.ConstraintLayout> 

@@ -1,0 +1,116 @@
+<?xml version="1.0" encoding="utf-8"?>
+<navigation xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/nav_graph"
+    app:startDestination="@id/navigation_library">
+
+    <fragment
+        android:id="@+id/navigation_library"
+        android:name="com.example.paintnumber.ui.library.LibraryFragment"
+        android:label="Thư viện">
+        <action
+            android:id="@+id/action_library_to_sketch_loading"
+            app:destination="@id/navigation_sketch_loading" />
+        <action
+            android:id="@+id/actionLibraryToCompletedImage"
+            app:destination="@id/completedImageFragment"
+            app:enterAnim="@anim/nav_default_enter_anim"
+            app:exitAnim="@anim/nav_default_exit_anim"
+            app:popEnterAnim="@anim/nav_default_pop_enter_anim"
+            app:popExitAnim="@anim/nav_default_pop_exit_anim" />
+    </fragment>
+
+    <fragment
+        android:id="@+id/navigation_artist"
+        android:name="com.example.paintnumber.ui.artist.ArtistFragment"
+        android:label="Nghệ sĩ" />
+
+    <fragment
+        android:id="@+id/navigation_daily"
+        android:name="com.example.paintnumber.ui.daily.DailyFragment"
+        android:label="Hàng ngày" />
+
+    <fragment
+        android:id="@+id/navigation_gallery"
+        android:name="com.example.paintnumber.ui.gallery.GalleryFragment"
+        android:label="Tác phẩm">
+        <action
+            android:id="@+id/action_gallery_to_sketch_loading"
+            app:destination="@id/navigation_sketch_loading" />
+        <action
+            android:id="@+id/action_gallery_to_completed_image"
+            app:destination="@id/completedImageFragment" />
+    </fragment>
+
+    <fragment
+        android:id="@+id/navigation_sketch_loading"
+        android:name="com.example.paintnumber.ui.sketch.SketchLoadingFragment"
+        android:label="Đang phác thảo">
+        <argument
+            android:name="imageId"
+            app:argType="string" />
+        <argument
+            android:name="lineArtResId"
+            app:argType="integer" />
+        <argument
+            android:name="svgResId"
+            app:argType="integer" />
+        <argument
+            android:name="progressPath"
+            app:argType="string"
+            app:nullable="true"
+            android:defaultValue="@null" />
+        <action
+            android:id="@+id/action_sketch_loading_to_paint"
+            app:destination="@id/navigation_paint"
+            app:popUpTo="@id/navigation_sketch_loading"
+            app:popUpToInclusive="true" />
+    </fragment>
+
+    <fragment
+        android:id="@+id/navigation_paint"
+        android:name="com.example.paintnumber.ui.paint.PaintFragment"
+        android:label="Tô màu">
+        <argument
+            android:name="imageId"
+            app:argType="string" />
+        <argument
+            android:name="lineArtResId"
+            app:argType="integer" />
+        <argument
+            android:name="svgResId"
+            app:argType="integer" />
+        <argument
+            android:name="progressPath"
+            app:argType="string"
+            app:nullable="true"
+            android:defaultValue="@null" />
+        <action
+            android:id="@+id/action_paint_to_congratulation"
+            app:destination="@id/navigation_congratulation"
+            app:popUpTo="@id/navigation_paint"
+            app:popUpToInclusive="true" />
+    </fragment>
+
+    <fragment
+        android:id="@+id/completedImageFragment"
+        android:name="com.example.paintnumber.ui.completed.CompletedImageFragment"
+        android:label="CompletedImageFragment">
+        <argument
+            android:name="imagePath"
+            app:argType="string" />
+    </fragment>
+
+    <fragment
+        android:id="@+id/navigation_congratulation"
+        android:name="com.example.paintnumber.ui.congratulation.CongratulationFragment"
+        android:label="Congratulation">
+        <argument
+            android:name="imagePath"
+            app:argType="string" />
+        <action
+            android:id="@+id/action_congratulation_to_completed_image"
+            app:destination="@id/completedImageFragment" />
+    </fragment>
+
+</navigation> 

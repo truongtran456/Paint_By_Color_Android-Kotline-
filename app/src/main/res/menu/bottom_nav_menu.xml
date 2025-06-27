@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<menu xmlns:android="http://schemas.android.com/apk/res/android">
+    <item
+        android:id="@+id/navigation_library"
+        android:icon="@drawable/ic_library"
+        android:title="Thư viện" />
+    <item
+        android:id="@+id/navigation_artist"
+        android:icon="@drawable/ic_artist"
+        android:title="Nghệ sĩ" />
+    <item
+        android:id="@+id/navigation_daily"
+        android:icon="@drawable/ic_daily"
+        android:title="Hàng ngày" />
+    <item
+        android:id="@+id/navigation_gallery"
+        android:icon="@drawable/ic_gallery"
+        android:title="Tác phẩm" />
+</menu> 
